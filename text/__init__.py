@@ -1,10 +1,11 @@
 """ from https://github.com/keithito/tacotron """
 from text import cleaners
-from text.symbols import symbols
+from text.symbols import symbols, accent_symbols
 
 
 # Mappings from symbol to numeric ID and vice versa:
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
+_accent_symbol_to_id = {s: i for i, s in enumerate(accent_symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols)}
 
 
@@ -33,6 +34,11 @@ def cleaned_text_to_sequence(cleaned_text):
       List of integers corresponding to the symbols in the text
   '''
   sequence = [_symbol_to_id[symbol] for symbol in cleaned_text]
+  return sequence
+
+
+def accent_to_sequence(accent):
+  sequence = [_accent_symbol_to_id[symbol] for symbol in accent]
   return sequence
 
 

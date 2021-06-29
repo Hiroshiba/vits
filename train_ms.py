@@ -135,15 +135,16 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 
   net_g.train()
   net_d.train()
-  for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(train_loader):
+  for batch_idx, (x, x1, x2, x3, x4, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(train_loader):
     x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
+    x1, x2, x3, x4 = x1.cuda(rank, non_blocking=True), x2.cuda(rank, non_blocking=True), x3.cuda(rank, non_blocking=True), x4.cuda(rank, non_blocking=True)
     spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(rank, non_blocking=True)
     y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
     speakers = speakers.cuda(rank, non_blocking=True)
 
     with autocast(enabled=hps.train.fp16_run):
       y_hat, l_length, attn, ids_slice, x_mask, z_mask,\
-      (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(x, x_lengths, spec, spec_lengths, speakers)
+      (z, z_p, m_p, logs_p, m_q, logs_q) = net_g(x, x1, x2, x3, x4, x_lengths, spec, spec_lengths, speakers)
 
       mel = spec_to_mel_torch(
           spec, 
@@ -235,14 +236,16 @@ def train_and_evaluate(rank, epoch, hps, nets, optims, schedulers, scaler, loade
 def evaluate(hps, generator, eval_loader, writer_eval):
     generator.eval()
     with torch.no_grad():
-      for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(eval_loader):
+      for batch_idx, (x, x1, x2, x3, x4, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(eval_loader):
         x, x_lengths = x.cuda(0), x_lengths.cuda(0)
+        x1, x2, x3, x4 = x1.cuda(0), x2.cuda(0), x3.cuda(0), x4.cuda(0)
         spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
         y, y_lengths = y.cuda(0), y_lengths.cuda(0)
         speakers = speakers.cuda(0)
 
         # remove else
         x = x[:1]
+        x1, x2, x3, x4 = x1[:1], x2[:1], x3[:1], x4[:1]
         x_lengths = x_lengths[:1]
         spec = spec[:1]
         spec_lengths = spec_lengths[:1]
@@ -250,7 +253,7 @@ def evaluate(hps, generator, eval_loader, writer_eval):
         y_lengths = y_lengths[:1]
         speakers = speakers[:1]
         break
-      y_hat, attn, mask, *_ = generator.module.infer(x, x_lengths, speakers, max_len=1000)
+      y_hat, attn, mask, *_ = generator.module.infer(x, x1, x2, x3, x4, x_lengths, speakers, max_len=1000)
       y_hat_lengths = mask.sum([1,2]).long() * hps.data.hop_length
 
       mel = spec_to_mel_torch(

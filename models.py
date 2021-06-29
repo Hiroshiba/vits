@@ -152,8 +152,16 @@ class TextEncoder(nn.Module):
     self.kernel_size = kernel_size
     self.p_dropout = p_dropout
 
-    self.emb = nn.Embedding(n_vocab, hidden_channels)
-    nn.init.normal_(self.emb.weight, 0.0, hidden_channels**-0.5)
+    self.emb = nn.Embedding(n_vocab, hidden_channels // 2)
+    nn.init.normal_(self.emb.weight, 0.0, (hidden_channels // 2) ** -0.5)
+    self.accent_emb1 = nn.Embedding(3, hidden_channels // 8)
+    nn.init.normal_(self.accent_emb1.weight, 0.0, (hidden_channels // 8) ** -0.5)
+    self.accent_emb2 = nn.Embedding(3, hidden_channels // 8)
+    nn.init.normal_(self.accent_emb2.weight, 0.0, (hidden_channels // 8) ** -0.5)
+    self.accent_emb3 = nn.Embedding(3, hidden_channels // 8)
+    nn.init.normal_(self.accent_emb3.weight, 0.0, (hidden_channels // 8) ** -0.5)
+    self.accent_emb4 = nn.Embedding(3, hidden_channels // 8)
+    nn.init.normal_(self.accent_emb4.weight, 0.0, (hidden_channels // 8) ** -0.5)
 
     self.encoder = attentions.Encoder(
       hidden_channels,
@@ -164,8 +172,13 @@ class TextEncoder(nn.Module):
       p_dropout)
     self.proj= nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
-  def forward(self, x, x_lengths):
-    x = self.emb(x) * math.sqrt(self.hidden_channels) # [b, t, h]
+  def forward(self, x, x1, x2, x3, x4, x_lengths):
+    x = self.emb(x) * math.sqrt(self.hidden_channels // 2)
+    x1 = self.accent_emb1(x1) * math.sqrt(self.hidden_channels // 8)
+    x2 = self.accent_emb2(x2) * math.sqrt(self.hidden_channels // 8)
+    x3 = self.accent_emb3(x3) * math.sqrt(self.hidden_channels // 8)
+    x4 = self.accent_emb4(x4) * math.sqrt(self.hidden_channels // 8)
+    x = torch.cat((x, x1, x2, x3, x4), dim=2) # [b, t, h]
     x = torch.transpose(x, 1, -1) # [b, h, t]
     x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
 
@@ -456,9 +469,9 @@ class SynthesizerTrn(nn.Module):
     if n_speakers > 1:
       self.emb_g = nn.Embedding(n_speakers, gin_channels)
 
-  def forward(self, x, x_lengths, y, y_lengths, sid=None):
+  def forward(self, x, x1, x2, x3, x4, x_lengths, y, y_lengths, sid=None):
 
-    x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths)
+    x, m_p, logs_p, x_mask = self.enc_p(x, x1, x2, x3, x4, x_lengths)
     if self.n_speakers > 0:
       g = self.emb_g(sid).unsqueeze(-1) # [b, h, 1]
     else:
@@ -496,8 +509,8 @@ class SynthesizerTrn(nn.Module):
     o = self.dec(z_slice, g=g)
     return o, l_length, attn, ids_slice, x_mask, y_mask, (z, z_p, m_p, logs_p, m_q, logs_q)
 
-  def infer(self, x, x_lengths, sid=None, noise_scale=1, length_scale=1, noise_scale_w=1., max_len=None):
-    x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths)
+  def infer(self, x, x1, x2, x3, x4, x_lengths, sid=None, noise_scale=1, length_scale=1, noise_scale_w=1., max_len=None):
+    x, m_p, logs_p, x_mask = self.enc_p(x, x1, x2, x3, x4, x_lengths)
     if self.n_speakers > 0:
       g = self.emb_g(sid).unsqueeze(-1) # [b, h, 1]
     else:

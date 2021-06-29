@@ -6,8 +6,9 @@ import logging
 import json
 import subprocess
 import numpy as np
-from scipy.io.wavfile import read
 import torch
+from pathlib import Path
+from acoustic_feature_extractor.data.wave import Wave
 
 MATPLOTLIB_FLAG = False
 
@@ -130,9 +131,9 @@ def plot_alignment_to_numpy(alignment, info=None):
   return data
 
 
-def load_wav_to_torch(full_path):
-  sampling_rate, data = read(full_path)
-  return torch.FloatTensor(data.astype(np.float32)), sampling_rate
+def load_wav_to_torch(full_path, sampling_rate):
+  wave = Wave.load(Path(full_path), sampling_rate=sampling_rate)
+  return torch.FloatTensor(wave.wave.astype(np.float32)), wave.sampling_rate
 
 
 def load_filepaths_and_text(filename, split="|"):
@@ -145,11 +146,10 @@ def get_hparams(init=True):
   parser = argparse.ArgumentParser()
   parser.add_argument('-c', '--config', type=str, default="./configs/base.json",
                       help='JSON file for configuration')
-  parser.add_argument('-m', '--model', type=str, required=True,
-                      help='Model name')
+  parser.add_argument('-o', '--output_dir', type=str, required=True)
   
   args = parser.parse_args()
-  model_dir = os.path.join("./logs", args.model)
+  model_dir = args.output_dir
 
   if not os.path.exists(model_dir):
     os.makedirs(model_dir)
