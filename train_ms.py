@@ -26,7 +26,7 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from models import MultiPeriodDiscriminator, SynthesizerTrn
 from text.symbols import symbols
 
-torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = False
 global_step = 0
 
 
@@ -187,9 +187,6 @@ def train_and_evaluate(
     for batch_idx, (
         x,
         x1,
-        x2,
-        x3,
-        x4,
         x_lengths,
         spec,
         spec_lengths,
@@ -200,12 +197,7 @@ def train_and_evaluate(
         x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(
             rank, non_blocking=True
         )
-        x1, x2, x3, x4 = (
-            x1.cuda(rank, non_blocking=True),
-            x2.cuda(rank, non_blocking=True),
-            x3.cuda(rank, non_blocking=True),
-            x4.cuda(rank, non_blocking=True),
-        )
+        x1 = x1.cuda(rank, non_blocking=True)
         spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(
             rank, non_blocking=True
         )
@@ -223,7 +215,7 @@ def train_and_evaluate(
                 x_mask,
                 z_mask,
                 (z, z_p, m_p, logs_p, m_q, logs_q),
-            ) = net_g(x, x1, x2, x3, x4, x_lengths, spec, spec_lengths, speakers)
+            ) = net_g(x, x1, x_lengths, spec, spec_lengths, speakers)
 
             mel = spec_to_mel_torch(
                 spec,
@@ -367,9 +359,6 @@ def evaluate(hps, generator, eval_loader, writer_eval):
         for batch_idx, (
             x,
             x1,
-            x2,
-            x3,
-            x4,
             x_lengths,
             spec,
             spec_lengths,
@@ -378,14 +367,14 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             speakers,
         ) in enumerate(eval_loader):
             x, x_lengths = x.cuda(0), x_lengths.cuda(0)
-            x1, x2, x3, x4 = x1.cuda(0), x2.cuda(0), x3.cuda(0), x4.cuda(0)
+            x1 = x1.cuda(0)
             spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
             y, y_lengths = y.cuda(0), y_lengths.cuda(0)
             speakers = speakers.cuda(0)
 
             # remove else
             x = x[:1]
-            x1, x2, x3, x4 = x1[:1], x2[:1], x3[:1], x4[:1]
+            x1 = x1[:1]
             x_lengths = x_lengths[:1]
             spec = spec[:1]
             spec_lengths = spec_lengths[:1]
@@ -394,7 +383,7 @@ def evaluate(hps, generator, eval_loader, writer_eval):
             speakers = speakers[:1]
             break
         y_hat, attn, mask, *_ = generator.module.infer(
-            x, x1, x2, x3, x4, x_lengths, speakers, max_len=1000
+            x, x1, x_lengths, speakers, max_len=1000
         )
         y_hat_lengths = mask.sum([1, 2]).long() * hps.data.hop_length
 

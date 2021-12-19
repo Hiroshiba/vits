@@ -22,7 +22,7 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from models import MultiPeriodDiscriminator, SynthesizerTrn
 from text.symbols import symbols
 
-torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.benchmark = False
 global_step = 0
 
 
