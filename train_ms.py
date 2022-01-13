@@ -14,17 +14,16 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-import commons
-import utils
-from data_utils import (
+from vits import commons, utils
+from vits.data_utils import (
     DistributedBucketSampler,
     TextAudioSpeakerCollate,
     TextAudioSpeakerLoader,
 )
-from losses import discriminator_loss, feature_loss, generator_loss, kl_loss
-from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
-from models import MultiPeriodDiscriminator, SynthesizerTrn
-from text.symbols import symbols
+from vits.losses import discriminator_loss, feature_loss, generator_loss, kl_loss
+from vits.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from vits.models import MultiPeriodDiscriminator, SynthesizerTrn
+from vits.text.symbols import symbols
 
 torch.backends.cudnn.benchmark = False
 global_step = 0
