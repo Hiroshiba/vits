@@ -122,6 +122,32 @@ class StochasticDurationPredictor(nn.Module):
             logw = z0
             return logw
 
+    def infer1(self, x, w=None, g=None, reverse=False, noise_scale=1.0):
+        assert reverse
+
+        x = torch.detach(x)
+        x = self.pre(x)
+        if g is not None:
+            g = torch.detach(g)
+            x = x + self.cond(g)
+        x = self.convs.infer1(x)
+        x = self.proj(x)
+
+        flows = list(reversed(self.flows))
+        flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
+        if noise_scale != 0:
+            z = (
+                torch.randn(x.size(0), 2, x.size(2)).to(device=x.device, dtype=x.dtype)
+                * noise_scale
+            )
+        else:
+            z = torch.zeros(x.size(0), 2, x.size(2)).to(device=x.device, dtype=x.dtype)
+        for flow in flows:
+            z = flow.infer1(z, g=x, reverse=reverse)
+        z0, z1 = torch.split(z, [1, 1], 1)
+        logw = z0
+        return logw
+
 
 class DurationPredictor(nn.Module):
     def __init__(
@@ -164,6 +190,22 @@ class DurationPredictor(nn.Module):
         x = self.drop(x)
         x = self.proj(x * x_mask)
         return x * x_mask
+
+    def infer1(self, x, g=None):
+        x = torch.detach(x)
+        if g is not None:
+            g = torch.detach(g)
+            x = x + self.cond(g)
+        x = self.conv_1(x)
+        x = torch.relu(x)
+        x = self.norm_1(x)
+        x = self.drop(x)
+        x = self.conv_2(x)
+        x = torch.relu(x)
+        x = self.norm_2(x)
+        x = self.drop(x)
+        x = self.proj(x)
+        return x
 
 
 class TextEncoder(nn.Module):
@@ -212,6 +254,17 @@ class TextEncoder(nn.Module):
         m, logs = torch.split(stats, self.out_channels, dim=1)
         return x, m, logs, x_mask
 
+    def infer1(self, x, x1):
+        x = self.emb(x) * math.sqrt(self.hidden_channels // 8 * 7)  # [b, t, h]
+        x1 = self.f0_linear(x1) * math.sqrt(self.hidden_channels // 8 * 1)  # [b, h, t]
+        x = torch.cat((x.transpose(1, -1), x1), dim=1)  # [b, h, t]
+
+        x = self.encoder.infer1(x)
+        stats = self.proj(x)
+
+        m, logs = torch.split(stats, self.out_channels, dim=1)
+        return x, m, logs
+
 
 class ResidualCouplingBlock(nn.Module):
     def __init__(
@@ -255,6 +308,15 @@ class ResidualCouplingBlock(nn.Module):
         else:
             for flow in reversed(self.flows):
                 x = flow(x, x_mask, g=g, reverse=reverse)
+        return x
+
+    def infer1(self, x, g=None, reverse=False):
+        if not reverse:
+            for flow in self.flows:
+                x, _ = flow.infer1(x, g=g, reverse=reverse)
+        else:
+            for flow in reversed(self.flows):
+                x = flow.infer1(x, g=g, reverse=reverse)
         return x
 
 
@@ -639,7 +701,7 @@ class SynthesizerTrn(nn.Module):
 
             attn_mask = torch.unsqueeze(x_mask, 2) * torch.unsqueeze(y_mask, -1)
             attn = (
-                monotonic_align.maximum_path(neg_cent, attn_mask.squeeze(1))
+                vits_monotonic_align.maximum_path(neg_cent, attn_mask.squeeze(1))
                 .unsqueeze(1)
                 .detach()
             )
@@ -714,6 +776,51 @@ class SynthesizerTrn(nn.Module):
         z = self.flow(z_p, y_mask, g=g, reverse=True)
         o = self.dec((z * y_mask)[:, :, :max_len], g=g)
         return o, attn, y_mask, (z, z_p, m_p, logs_p)
+
+    def infer1(
+        self,
+        x,
+        x1,
+        length=None,
+        sid=None,
+        noise_scale=0,
+        noise_scale_w=0,
+    ):
+        x, m_p, logs_p = self.enc_p.infer1(x, x1)
+        if self.n_speakers > 0:
+            g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
+        else:
+            g = None
+
+        if length is None:
+            if self.use_sdp:
+                logw = self.dp.infer1(x, g=g, reverse=True, noise_scale=noise_scale_w)
+            else:
+                logw = self.dp.infer1(x, g=g)
+            w = torch.exp(logw)
+            w_ceil = torch.ceil(w)
+
+        else:
+            w_ceil = length
+
+        m_p = (
+            m_p.squeeze()
+            .repeat_interleave(w_ceil.to(torch.int64).squeeze(), dim=-1)
+            .unsqueeze(0)
+        )
+        z_p = m_p
+
+        if noise_scale != 0:
+            logs_p = (
+                logs_p.squeeze()
+                .repeat_interleave(w_ceil.to(torch.int64).squeeze(), dim=-1)
+                .unsqueeze(0)
+            )
+            z_p += torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
+
+        z = self.flow.infer1(z_p, g=g, reverse=True)
+        o = self.dec(z, g=g)
+        return o
 
     def voice_conversion(self, y, y_lengths, sid_src, sid_tgt):
         assert self.n_speakers > 0, "n_speakers have to be larger than 0."

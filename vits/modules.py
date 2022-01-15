@@ -131,6 +131,20 @@ class DDSConv(nn.Module):
             x = x + y
         return x * x_mask
 
+    def infer1(self, x, g=None):
+        if g is not None:
+            x = x + g
+        for i in range(self.n_layers):
+            y = self.convs_sep[i](x)
+            y = self.norms_1[i](y)
+            y = F.gelu(y)
+            y = self.convs_1x1[i](y)
+            y = self.norms_2[i](y)
+            y = F.gelu(y)
+            y = self.drop(y)
+            x = x + y
+        return x
+
 
 class WN(torch.nn.Module):
     def __init__(
@@ -210,6 +224,33 @@ class WN(torch.nn.Module):
             else:
                 output = output + res_skip_acts
         return output * x_mask
+
+    def infer1(self, x, g=None, **kwargs):
+        output = torch.zeros_like(x)
+        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+
+        if g is not None:
+            g = self.cond_layer(g)
+
+        for i in range(self.n_layers):
+            x_in = self.in_layers[i](x)
+            if g is not None:
+                cond_offset = i * 2 * self.hidden_channels
+                g_l = g[:, cond_offset : cond_offset + 2 * self.hidden_channels, :]
+            else:
+                g_l = torch.zeros_like(x_in)
+
+            acts = commons.fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
+            acts = self.drop(acts)
+
+            res_skip_acts = self.res_skip_layers[i](acts)
+            if i < self.n_layers - 1:
+                res_acts = res_skip_acts[:, : self.hidden_channels, :]
+                x = (x + res_acts)
+                output = output + res_skip_acts[:, self.hidden_channels :, :]
+            else:
+                output = output + res_skip_acts
+        return output
 
     def remove_weight_norm(self):
         if self.gin_channels != 0:
@@ -372,6 +413,15 @@ class Log(nn.Module):
             x = torch.exp(x) * x_mask
             return x
 
+    def forward(self, x, reverse=False, **kwargs):
+        if not reverse:
+            y = torch.log(torch.clamp_min(x, 1e-5))
+            logdet = torch.sum(-y, [1, 2])
+            return y, logdet
+        else:
+            x = torch.exp(x)
+            return x
+
 
 class Flip(nn.Module):
     def forward(self, x, *args, reverse=False, **kwargs):
@@ -381,6 +431,9 @@ class Flip(nn.Module):
             return x, logdet
         else:
             return x
+
+    def infer1(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
 
 
 class ElementwiseAffine(nn.Module):
@@ -398,6 +451,16 @@ class ElementwiseAffine(nn.Module):
             return y, logdet
         else:
             x = (x - self.m) * torch.exp(-self.logs) * x_mask
+            return x
+
+    def infer1(self, x, reverse=False, **kwargs):
+        if not reverse:
+            y = self.m + torch.exp(self.logs) * x
+            y = y
+            logdet = torch.sum(self.logs, [1, 2])
+            return y, logdet
+        else:
+            x = (x - self.m) * torch.exp(-self.logs)
             return x
 
 
@@ -457,6 +520,27 @@ class ResidualCouplingLayer(nn.Module):
             x = torch.cat([x0, x1], 1)
             return x
 
+    def infer1(self, x, g=None, reverse=False):
+        x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
+        h = self.pre(x0)
+        h = self.enc.infer1(h, g=g)
+        stats = self.post(h)
+        if not self.mean_only:
+            m, logs = torch.split(stats, [self.half_channels] * 2, 1)
+        else:
+            m = stats
+            logs = torch.zeros_like(m)
+
+        if not reverse:
+            x1 = m + x1 * torch.exp(logs)
+            x = torch.cat([x0, x1], 1)
+            logdet = torch.sum(logs, [1, 2])
+            return x, logdet
+        else:
+            x1 = (x1 - m) * torch.exp(-logs)
+            x = torch.cat([x0, x1], 1)
+            return x
+
 
 class ConvFlow(nn.Module):
     def __init__(
@@ -512,6 +596,38 @@ class ConvFlow(nn.Module):
 
         x = torch.cat([x0, x1], 1) * x_mask
         logdet = torch.sum(logabsdet * x_mask, [1, 2])
+        if not reverse:
+            return x, logdet
+        else:
+            return x
+
+    def infer1(self, x, g=None, reverse=False):
+        x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
+        h = self.pre(x0)
+        h = self.convs.infer1(h, g=g)
+        h = self.proj(h)
+
+        b, c, t = x0.shape
+        h = h.reshape(b, c, -1, t).permute(0, 1, 3, 2)  # [b, cx?, t] -> [b, c, t, ?]
+
+        unnormalized_widths = h[..., : self.num_bins] / math.sqrt(self.filter_channels)
+        unnormalized_heights = h[..., self.num_bins : 2 * self.num_bins] / math.sqrt(
+            self.filter_channels
+        )
+        unnormalized_derivatives = h[..., 2 * self.num_bins :]
+
+        x1, logabsdet = piecewise_rational_quadratic_transform(
+            x1,
+            unnormalized_widths,
+            unnormalized_heights,
+            unnormalized_derivatives,
+            inverse=reverse,
+            tails="linear",
+            tail_bound=self.tail_bound,
+        )
+
+        x = torch.cat([x0, x1], 1)
+        logdet = torch.sum(logabsdet, [1, 2])
         if not reverse:
             return x, logdet
         else:

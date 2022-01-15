@@ -72,6 +72,19 @@ class Encoder(nn.Module):
         x = x * x_mask
         return x
 
+    def infer1(self, x):
+        x = x
+        for i in range(self.n_layers):
+            y = self.attn_layers[i](x, x)
+            y = self.drop(y)
+            x = self.norm_layers_1[i](x + y)
+
+            y = self.ffn_layers[i].infer1(x)
+            y = self.drop(y)
+            x = self.norm_layers_2[i](x + y)
+        x = x
+        return x
+
 
 class Decoder(nn.Module):
     def __init__(
@@ -397,6 +410,16 @@ class FFN(nn.Module):
         x = self.drop(x)
         x = self.conv_2(self.padding(x * x_mask))
         return x * x_mask
+
+    def infer1(self, x):
+        x = self.conv_1(self.padding(x))
+        if self.activation == "gelu":
+            x = x * torch.sigmoid(1.702 * x)
+        else:
+            x = torch.relu(x)
+        x = self.drop(x)
+        x = self.conv_2(self.padding(x))
+        return x
 
     def _causal_padding(self, x):
         if self.kernel_size == 1:
